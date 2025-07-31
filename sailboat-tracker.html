@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sailboat GPS Tracker</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: white;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        #map {
+            height: 100vh;
+            width: 100vw;
+        }
+        
+        .control-group {
+            margin-bottom: 10px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #ccc;
+        }
+        
+        input, button, select {
+            width: 200px;
+            padding: 8px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #333;
+            color: white;
+            font-size: 12px;
+        }
+        
+        button {
+            background: #0066cc;
+            cursor: pointer;
+            margin-top: 5px;
+        }
+        
+        button:hover {
+            background: #0080ff;
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        #status {
+            font-size: 11px;
+            color: #888;
+            margin-top: 10px;
+        }
+        
+        .info-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            min-width: 200px;
+        }
+        
+        .tilt-panel {
+            position: absolute;
+            top: 10px;
+            right: 230px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            width: 180px;
+        }
+        
+        #tiltDisplay {
+            width: 150px;
+            height: 150px;
+            margin: 10px auto;
+            position: relative;
+            border: 2px solid #444;
+            border-radius: 50%;
+            background: radial-gradient(circle, #1a1a1a 0%, #333 100%);
+        }
+        
+        .horizon-line {
+            position: absolute;
+            top: 50%;
+            left: 10%;
+            right: 10%;
+            height: 2px;
+            background: #00ff88;
+            transform-origin: center;
+            transition: transform 0.3s ease;
+        }
+        
+        .tilt-indicator {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 2px;
+            height: 20px;
+            background: #ff4444;
+        }
+        
+        .tilt-marks {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+        
+        .tilt-mark {
+            position: absolute;
+            background: #666;
+            transform-origin: 75px 75px;
+        }
+        
+        .tilt-mark.major {
+            width: 20px;
+            height: 2px;
+            top: 74px;
+            left: 10px;
+        }
+        
+        .tilt-mark.minor {
+            width: 10px;
+            height: 1px;
+            top: 74.5px;
+            left: 15px;
+        }
+        
+        .tilt-value {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 18px;
+            font-weight: bold;
+            color: #00ff88;
+        }
+        
+        .boat-icon {
+            font-size: 20px;
+        }
+        
+        .mode-description {
+            font-size: 10px;
+            color: #aaa;
+            margin-top: 5px;
+            line-height: 1.3;
+        }
+        
+        #csvData {
+            width: 200px;
+            height: 60px;
+            font-family: monospace;
+            font-size: 10px;
+            resize: vertical;
+        }
+        
+        .warning {
+            color: #ff9900;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        
+        .success {
+            color: #00ff88;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        
+        .error {
+            color: #ff4444;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        
+        #fileUrl {
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <div class="control-group">
+            <label for="inputMode">Input Mode:</label>
+            <select id="inputMode">
+                <option value="url">Monitor Server File</option>
+                <option value="manual">Manual CSV Input</option>
+                <option value="file">File Upload (No Auto-Update)</option>
+            </select>
+            <div class="mode-description" id="modeDescription">
+                Monitor a CSV file on your web server for automatic updates
+            </div>
+        </div>
+        
+        <div class="control-group" id="urlInputGroup">
+            <label for="fileUrl">CSV File URL:</label>
+            <input type="text" id="fileUrl" placeholder="./sailboat_data.csv" value="./sailboat_data.csv" />
+            <div class="success">File will be monitored for changes automatically</div>
+        </div>
+        
+        <div class="control-group" id="fileInputGroup" style="display: none;">
+            <label for="csvFile">Select CSV File:</label>
+            <input type="file" id="csvFile" accept=".csv" />
+            <div class="warning">File mode won't auto-update when file changes</div>
+        </div>
+        
+        <div class="control-group" id="manualInputGroup" style="display: none;">
+            <label for="csvData">CSV Data (lat,lng,heading,tilt):</label>
+            <textarea id="csvData" placeholder="42.360001,-71.058901,45,5&#10;42.360012,-71.058923,48,8&#10;42.360023,-71.058945,52,3"></textarea>
+        </div>
+        
+        
+        <div class="control-group">
+            <label for="trailLength">Trail Length:</label>
+            <input type="number" id="trailLength" value="20" min="1" max="100" />
+        </div>
+        
+        <div class="control-group">
+            <label for="updateInterval">Check Interval (seconds):</label>
+            <input type="number" id="updateInterval" value="2" min="0.5" max="60" step="0.5" />
+        </div>
+        
+        
+        <button id="startTracking">Start Tracking</button><br>
+        <button id="stopTracking" disabled>Stop Tracking</button><br>
+        
+        <button id="clearData">Clear Data</button>
+        <!--<button id="testConnection">Test File Connection</button> -->
+        
+        <div id="status">Ready - Enter CSV file URL and start tracking</div>
+    </div>
+    
+    <div class="tilt-panel">
+        <h3 style="margin: 0 0 10px 0; font-size: 14px; text-align: center; color: #ccc;">Boat Tilt</h3>
+        <div id="tiltDisplay">
+            <div class="tilt-marks" id="tiltMarks"></div>
+            <div class="horizon-line" id="horizonLine"></div>
+            <div class="tilt-indicator"></div>
+            <div class="tilt-value" id="tiltValue">0°</div>
+        </div>
+        <div style="text-align: center; font-size: 10px; color: #888; margin-top: 10px;">
+            Port ← → Starboard
+        </div>
+    </div>
+    
+    <div class="info-panel">
+        <div id="currentInfo">
+            <strong>Current Position:</strong><br>
+            Lat: --<br>
+            Lng: --<br>
+            Heading: --°<br>
+            <br>
+            <strong>Stats:</strong><br>
+            Points: 0<br>
+            Last Update: --<br>
+            File Size: -- bytes
+        </div>
+    </div>
+    
+    <div id="map"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <script>
+        class SailboatTracker {
+            constructor() {
+                this.map = null;
+                this.boatMarker = null;
+                this.trailLayer = null;
+                this.positions = [];
+                this.csvFile = null;
+                this.isTracking = false;
+                this.updateInterval = null;
+                this.lastDataHash = '';
+                this.lastFileSize = 0;
+                this.lastModified = null;
+                this.inputMode = 'url';
+                this.fileUrl = './sailboat_data.csv';
+                this.consecutiveErrors = 0;
+                
+                this.initMap();
+                this.initControls();
+                this.initTiltDisplay();
+            }
+            
+            initMap() {
+                // Initialize map centered on Boston area (you can change this)
+                this.map = L.map('map').setView([41.77749239845573, -71.38904831352781], 13);
+                
+                // Add dark tile layer
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+                    subdomains: 'abcd',
+                    maxZoom: 19
+                }).addTo(this.map);
+                
+                // Initialize trail layer
+                this.trailLayer = L.layerGroup().addTo(this.map);
+            }
+            
+            initControls() {
+                const inputModeSelect = document.getElementById('inputMode');
+                const csvFileInput = document.getElementById('csvFile');
+                const csvDataTextarea = document.getElementById('csvData');
+                const fileUrlInput = document.getElementById('fileUrl');
+                const startBtn = document.getElementById('startTracking');
+                const stopBtn = document.getElementById('stopTracking');
+                const clearBtn = document.getElementById('clearData');
+                const testBtn = document.getElementById('testConnection');
+                const fileInputGroup = document.getElementById('fileInputGroup');
+                const manualInputGroup = document.getElementById('manualInputGroup');
+                const urlInputGroup = document.getElementById('urlInputGroup');
+                const modeDescription = document.getElementById('modeDescription');
+                
+                inputModeSelect.addEventListener('change', (e) => {
+                    this.inputMode = e.target.value;
+                    this.updateInputModeUI();
+                });
+                
+                fileUrlInput.addEventListener('change', (e) => {
+                    this.fileUrl = e.target.value;
+                });
+                
+                csvFileInput.addEventListener('change', (e) => {
+                    this.csvFile = e.target.files[0];
+                    if (this.csvFile) {
+                        this.readCSVFile();
+                        this.updateStatus('File loaded: ' + this.csvFile.name);
+                    }
+                });
+                
+                startBtn.addEventListener('click', () => {
+                    this.startTracking();
+                });
+                
+                stopBtn.addEventListener('click', () => {
+                    this.stopTracking();
+                });
+                
+                clearBtn.addEventListener('click', () => {
+                    this.clearData();
+                });
+                
+                testBtn.addEventListener('click', () => {
+                    this.testFileConnection();
+                });
+                
+                // Monitor manual input for changes
+                csvDataTextarea.addEventListener('input', () => {
+                    if (this.isTracking && this.inputMode === 'manual') {
+                        this.processManualInput();
+                    }
+                });
+                
+                // Initialize UI
+                this.updateInputModeUI();
+            }
+            
+            initTiltDisplay() {
+                const tiltMarks = document.getElementById('tiltMarks');
+                
+                // Create tilt marks for degrees
+                for (let angle = 0; angle < 360; angle += 15) {
+                    const mark = document.createElement('div');
+                    mark.className = angle % 30 === 0 ? 'tilt-mark major' : 'tilt-mark minor';
+                    mark.style.transform = `rotate(${angle}deg)`;
+                    tiltMarks.appendChild(mark);
+                }
+            }
+            
+            updateInputModeUI() {
+                const fileInputGroup = document.getElementById('fileInputGroup');
+                const manualInputGroup = document.getElementById('manualInputGroup');
+                const urlInputGroup = document.getElementById('urlInputGroup');
+                const modeDescription = document.getElementById('modeDescription');
+                
+                // Hide all groups
+                fileInputGroup.style.display = 'none';
+                manualInputGroup.style.display = 'none';
+                urlInputGroup.style.display = 'none';
+                
+                if (this.inputMode === 'url') {
+                    urlInputGroup.style.display = 'block';
+                    modeDescription.textContent = 'Monitor a CSV file on your web server for automatic updates';
+                } else if (this.inputMode === 'file') {
+                    fileInputGroup.style.display = 'block';
+                    modeDescription.textContent = 'Upload a CSV file (won\'t auto-update when file changes on disk)';
+                } else {
+                    manualInputGroup.style.display = 'block';
+                    modeDescription.textContent = 'Paste your CSV data below and it will update automatically';
+                }
+            }
+            
+            async testFileConnection() {
+                try {
+                    this.updateStatus('Testing connection...');
+                    const response = await fetch(this.fileUrl, {
+                        method: 'HEAD',
+                        cache: 'no-cache'
+                    });
+                    
+                    if (response.ok) {
+                        const fileSize = response.headers.get('content-length');
+                        const lastModified = response.headers.get('last-modified');
+                        this.updateStatus(`✓ Connection successful! File size: ${fileSize} bytes, Modified: ${lastModified}`);
+                    } else {
+                        this.updateStatus(`✗ Connection failed: ${response.status} ${response.statusText}`);
+                    }
+                } catch (error) {
+                    this.updateStatus(`✗ Connection error: ${error.message}`);
+                }
+            }
+            
+            startTracking() {
+                if (this.isTracking) return;
+                
+                this.isTracking = true;
+                this.consecutiveErrors = 0;
+                document.getElementById('startTracking').disabled = true;
+                document.getElementById('stopTracking').disabled = false;
+                
+                const intervalSeconds = parseFloat(document.getElementById('updateInterval').value);
+                
+                // Initial read
+                if (this.inputMode === 'url') {
+                    this.fetchAndProcessFile();
+                } else if (this.inputMode === 'manual') {
+                    this.processManualInput();
+                } else if (this.csvFile) {
+                    this.readCSVFile();
+                }
+                
+                // Set up periodic updates
+                this.updateInterval = setInterval(() => {
+                    if (this.inputMode === 'url') {
+                        this.fetchAndProcessFile();
+                    } else if (this.inputMode === 'manual') {
+                        this.processManualInput();
+                    } else if (this.csvFile) {
+                        this.readCSVFile();
+                    }
+                }, intervalSeconds * 1000);
+                
+                this.updateStatus('Tracking started...');
+            }
+            
+            stopTracking() {
+                this.isTracking = false;
+                document.getElementById('startTracking').disabled = false;
+                document.getElementById('stopTracking').disabled = true;
+                
+                if (this.updateInterval) {
+                    clearInterval(this.updateInterval);
+                    this.updateInterval = null;
+                }
+                
+                this.updateStatus('Tracking stopped');
+            }
+            
+            async fetchAndProcessFile() {
+                try {
+                    const response = await fetch(this.fileUrl + '?t=' + Date.now(), {
+                        cache: 'no-cache',
+                        headers: {
+                            'Cache-Control': 'no-cache, no-store, must-revalidate',
+                            'Pragma': 'no-cache',
+                            'Expires': '0'
+                        }
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const csvContent = await response.text();
+                    const fileSize = new Blob([csvContent]).size;
+                    const lastModified = response.headers.get('last-modified');
+                    
+                    // Check if file has changed
+                    const contentHash = this.simpleHash(csvContent);
+                    const hasChanged = contentHash !== this.lastDataHash || 
+                                     fileSize !== this.lastFileSize ||
+                                     lastModified !== this.lastModified;
+                    
+                    if (hasChanged) {
+                        this.lastDataHash = contentHash;
+                        this.lastFileSize = fileSize;
+                        this.lastModified = lastModified;
+                        
+                        Papa.parse(csvContent, {
+                            complete: (results) => {
+                                this.processCSVData(results.data);
+                                this.consecutiveErrors = 0; // Reset error counter on success
+                            },
+                            skipEmptyLines: true
+                        });
+                        
+                        this.updateStatus(`File updated - ${fileSize} bytes, ${this.positions.length} points`);
+                    }
+                    
+                } catch (error) {
+                    this.consecutiveErrors++;
+                    console.error('Error fetching file:', error);
+                    
+                    if (this.consecutiveErrors <= 3) {
+                        this.updateStatus(`Error fetching file (${this.consecutiveErrors}/3): ${error.message}`);
+                    } else {
+                        this.updateStatus(`Multiple fetch errors - check file path and server`);
+                    }
+                }
+            }
+            
+            clearData() {
+                this.positions = [];
+                this.lastDataHash = '';
+                this.lastFileSize = 0;
+                this.lastModified = null;
+                this.consecutiveErrors = 0;
+                
+                if (this.boatMarker) {
+                    this.map.removeLayer(this.boatMarker);
+                    this.boatMarker = null;
+                }
+                
+                this.trailLayer.clearLayers();
+                this.updateInfo();
+                this.updateStatus('Data cleared');
+                
+                if (this.inputMode === 'manual') {
+                    document.getElementById('csvData').value = '';
+                }
+            }
+            
+            processManualInput() {
+                const csvData = document.getElementById('csvData').value.trim();
+                if (!csvData) return;
+                
+                // Check if data has changed
+                const dataHash = this.simpleHash(csvData);
+                if (dataHash === this.lastDataHash) return;
+                
+                this.lastDataHash = dataHash;
+                
+                Papa.parse(csvData, {
+                    complete: (results) => {
+                        this.processCSVData(results.data);
+                    },
+                    skipEmptyLines: true
+                });
+            }
+            
+            updateTiltDisplay() {
+                if (this.positions.length === 0) return;
+                
+                const currentPosition = this.positions[this.positions.length - 1];
+                const tilt = currentPosition.tilt || 0;
+                
+                const horizonLine = document.getElementById('horizonLine');
+                const tiltValue = document.getElementById('tiltValue');
+                
+                // Update horizon line rotation (positive tilt = lean to starboard/right)
+                horizonLine.style.transform = `translateY(-50%) rotate(${tilt}deg)`;
+                
+                // Update tilt value display
+                tiltValue.textContent = `${Math.abs(tilt).toFixed(1)}°`;
+                
+                // Color coding based on tilt severity
+                if (Math.abs(tilt) < 10) {
+                    tiltValue.style.color = '#00ff88'; // Green - safe
+                    horizonLine.style.background = '#00ff88';
+                } else if (Math.abs(tilt) < 20) {
+                    tiltValue.style.color = '#ffaa00'; // Orange - caution
+                    horizonLine.style.background = '#ffaa00';
+                } else {
+                    tiltValue.style.color = '#ff4444'; // Red - high tilt
+                    horizonLine.style.background = '#ff4444';
+                }
+            }
+            
+            readCSVFile() {
+                if (!this.csvFile) return;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const csv = e.target.result;
+                    
+                    // Check if data has changed
+                    const dataHash = this.simpleHash(csv);
+                    if (dataHash === this.lastDataHash) return;
+                    
+                    this.lastDataHash = dataHash;
+                    
+                    Papa.parse(csv, {
+                        complete: (results) => {
+                            this.processCSVData(results.data);
+                        },
+                        skipEmptyLines: true
+                    });
+                };
+                reader.readAsText(this.csvFile);
+            }
+            
+            simpleHash(str) {
+                let hash = 0;
+                for (let i = 0; i < str.length; i++) {
+                    const char = str.charCodeAt(i);
+                    hash = ((hash << 5) - hash) + char;
+                    hash = hash & hash; // Convert to 32-bit integer
+                }
+                return hash;
+            }
+            
+            processCSVData(data) {
+                // Clear existing positions and rebuild from CSV
+                this.positions = [];
+                
+                data.forEach((row, index) => {
+                    if (row.length >= 3) {
+                        const lat = parseFloat(row[0]);
+                        const lng = parseFloat(row[1]);
+                        const heading = parseFloat(row[2]);
+                        const tilt = row.length >= 4 ? parseFloat(row[3]) : 0;
+                        
+                        if (!isNaN(lat) && !isNaN(lng) && !isNaN(heading)) {
+                            this.positions.push({
+                                lat: lat,
+                                lng: lng,
+                                heading: heading,
+                                tilt: isNaN(tilt) ? 0 : tilt,
+                                timestamp: new Date()
+                            });
+                        }
+                    }
+                });
+                
+                if (this.positions.length > 0) {
+                    this.updateMap();
+                    this.updateTiltDisplay();
+                    this.updateInfo();
+                }
+            }
+            
+            updateMap() {
+                if (this.positions.length === 0) return;
+                
+                const currentPosition = this.positions[this.positions.length - 1];
+                
+                // Update boat marker
+                this.updateBoatMarker(currentPosition);
+                
+                // Update trail
+                this.updateTrail();
+                
+                // Center map on current position (only if this is the first position)
+                if (this.positions.length === 1) {
+                    this.map.setView([currentPosition.lat, currentPosition.lng], 15);
+                }
+            }
+            
+            updateBoatMarker(position) {
+                if (this.boatMarker) {
+                    this.map.removeLayer(this.boatMarker);
+                }
+                
+                // Create a custom boat icon that shows heading
+                const boatIcon = L.divIcon({
+                    html: `<div style="transform: rotate(${position.heading}deg); font-size: 20px; color: #ff4444;">⛵</div>`,
+                    className: 'boat-icon',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
+                
+                this.boatMarker = L.marker([position.lat, position.lng], {
+                    icon: boatIcon
+                }).addTo(this.map);
+                
+                this.boatMarker.bindPopup(`
+                    <strong>Sailboat Position</strong><br>
+                    Lat: ${position.lat.toFixed(6)}<br>
+                    Lng: ${position.lng.toFixed(6)}<br>
+                    Heading: ${position.heading}°<br>
+                    Tilt: ${position.tilt}°
+                `);
+            }
+            
+            updateTrail() {
+                // Clear existing trail
+                this.trailLayer.clearLayers();
+                
+                if (this.positions.length < 2) return;
+                
+                const trailLength = parseInt(document.getElementById('trailLength').value);
+                const recentPositions = this.positions.slice(-trailLength);
+                
+                // Create trail polyline
+                const trailCoords = recentPositions.map(pos => [pos.lat, pos.lng]);
+                
+                const trail = L.polyline(trailCoords, {
+                    color: '#00ff88',
+                    weight: 3,
+                    opacity: 0.7
+                }).addTo(this.trailLayer);
+                
+                // Add position markers for trail points
+                recentPositions.forEach((pos, index) => {
+                    if (index < recentPositions.length - 1) { // Don't add marker for current position
+                        const opacity = (index + 1) / recentPositions.length * 0.6;
+                        L.circleMarker([pos.lat, pos.lng], {
+                            radius: 3,
+                            color: '#00ff88',
+                            fillColor: '#00ff88',
+                            fillOpacity: opacity,
+                            opacity: opacity
+                        }).addTo(this.trailLayer);
+                    }
+                });
+            }
+            
+            updateInfo() {
+                const info = document.getElementById('currentInfo');
+                
+                if (this.positions.length === 0) {
+                    info.innerHTML = `
+                        <strong>Current Position:</strong><br>
+                        Lat: --<br>
+                        Lng: --<br>
+                        Heading: --°<br>
+                        Tilt: --°<br>
+                        <br>
+                        <strong>Stats:</strong><br>
+                        Points: 0<br>
+                        Last Update: --<br>
+                        File Size: -- bytes
+                    `;
+                    return;
+                }
+                
+                const current = this.positions[this.positions.length - 1];
+                
+                info.innerHTML = `
+                    <strong>Current Position:</strong><br>
+                    Lat: ${current.lat.toFixed(6)}<br>
+                    Lng: ${current.lng.toFixed(6)}<br>
+                    Heading: ${current.heading}°<br>
+                    Tilt: ${current.tilt.toFixed(1)}°<br>
+                    <br>
+                    <strong>Stats:</strong><br>
+                    Points: ${this.positions.length}<br>
+                    Last Update: ${new Date().toLocaleTimeString()}<br>
+                    File Size: ${this.lastFileSize} bytes
+                `;
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+        }
+        
+        // Initialize the tracker when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new SailboatTracker();
+        });
+    </script>
+</body>
+</html>
