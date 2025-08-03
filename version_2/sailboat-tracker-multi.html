@@ -1,0 +1,366 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Sailboat GPS Tracker</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #1a1a1a;
+            color: white;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #sidebar {
+            width: 300px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            overflow-y: auto;
+            z-index: 1000;
+        }
+        #map {
+            flex-grow: 1;
+            height: 100vh;
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #ccc;
+            font-weight: 500;
+        }
+        input, button, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #444;
+            border-radius: 5px;
+            background: #333;
+            color: white;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #007aff;
+            cursor: pointer;
+            margin-top: 10px;
+            font-weight: 600;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        #status {
+            font-size: 12px;
+            color: #888;
+            margin-top: 15px;
+            line-height: 1.4;
+        }
+        .info-panel, .tilt-panel {
+            background: rgba(30, 30, 30, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        h3 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            text-align: center;
+            color: #eee;
+            border-bottom: 1px solid #444;
+            padding-bottom: 10px;
+        }
+        #tiltDisplay {
+            width: 150px;
+            height: 150px;
+            margin: 15px auto;
+            position: relative;
+            border: 2px solid #444;
+            border-radius: 50%;
+            background: radial-gradient(circle, #2a2a2a 0%, #1a1a1a 100%);
+        }
+        .horizon-line {
+            position: absolute;
+            top: 50%;
+            left: 10%;
+            right: 10%;
+            height: 2px;
+            background: #00c853;
+            transform-origin: center;
+            transition: transform 0.3s ease;
+        }
+        .tilt-value {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 20px;
+            font-weight: bold;
+            color: #00c853;
+        }
+        .boat-icon {
+            text-align: center;
+            line-height: 30px;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 0 10px rgba(255,255,255,0.7);
+        }
+        .boat-label {
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 10px;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>Sailboat Tracker</h2>
+        <div class="control-group">
+            <label for="fileUrl">CSV File URL:</label>
+            <input type="text" id="fileUrl" value="./sailboat_data_multi.csv" />
+        </div>
+        <div class="control-group">
+            <label for="updateInterval">Update Interval (s):</label>
+            <input type="number" id="updateInterval" value="2" min="1" max="60" />
+        </div>
+        <button id="startTracking">Start Tracking</button>
+        <button id="stopTracking" disabled>Stop Tracking</button>
+        <div id="status">Ready to track.</div>
+
+        <div class="control-group" style="margin-top: 20px;">
+            <label for="boatSelector">Select a Sailboat:</label>
+            <select id="boatSelector"></select>
+        </div>
+
+        <div class="info-panel">
+            <h3>Selected Boat Info</h3>
+            <div id="currentInfo">
+                Lat: --<br>
+                Lng: --<br>
+                Heading: --
+            </div>
+        </div>
+
+        <div class="tilt-panel">
+            <h3>Boat Tilt</h3>
+            <div id="tiltDisplay">
+                <div class="horizon-line" id="horizonLine"></div>
+                <div class="tilt-value" id="tiltValue">0°</div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    
+    <script>
+        class MultiSailboatTracker {
+            constructor() {
+                this.map = null;
+                this.sailboats = new Map(); // Using a Map to store boat data by ID
+                this.isTracking = false;
+                this.updateInterval = null;
+                this.lastData = "";
+                this.fileUrl = document.getElementById('fileUrl').value;
+                this.selectedBoatId = null;
+
+                this.boatColors = ['#ff4d4d', '#4dffff', '#4dff4d', '#ffff4d', '#ff4dff', '#4d4dff'];
+
+                this.initMap();
+                this.initControls();
+            }
+
+            initMap() {
+                this.map = L.map('map').setView([41.777, -71.389], 13);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+                }).addTo(this.map);
+            }
+
+            initControls() {
+                document.getElementById('startTracking').addEventListener('click', () => this.startTracking());
+                document.getElementById('stopTracking').addEventListener('click', () => this.stopTracking());
+                document.getElementById('boatSelector').addEventListener('change', (e) => {
+                    this.selectedBoatId = e.target.value;
+                    this.updateSelectedBoatInfo();
+                });
+                document.getElementById('fileUrl').addEventListener('change', (e) => {
+                    this.fileUrl = e.target.value;
+                });
+            }
+
+            startTracking() {
+                if (this.isTracking) return;
+                this.isTracking = true;
+                document.getElementById('startTracking').disabled = true;
+                document.getElementById('stopTracking').disabled = false;
+                this.updateStatus('Starting tracking...');
+                this.fetchAndProcessFile();
+                const interval = parseInt(document.getElementById('updateInterval').value, 10) * 1000;
+                this.updateInterval = setInterval(() => this.fetchAndProcessFile(), interval);
+            }
+
+            stopTracking() {
+                if (!this.isTracking) return;
+                this.isTracking = false;
+                document.getElementById('startTracking').disabled = false;
+                document.getElementById('stopTracking').disabled = true;
+                clearInterval(this.updateInterval);
+                this.updateStatus('Tracking stopped.');
+            }
+
+            async fetchAndProcessFile() {
+                try {
+                    const response = await fetch(this.fileUrl + `?t=${Date.now()}`, { cache: 'no-cache' });
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    const csvContent = await response.text();
+
+                    if (csvContent === this.lastData) return; // No changes
+                    this.lastData = csvContent;
+
+                    Papa.parse(csvContent, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: (results) => {
+                            this.processCSVData(results.data);
+                        }
+                    });
+                } catch (error) {
+                    this.updateStatus(`Error: ${error.message}`);
+                    console.error('Fetch error:', error);
+                }
+            }
+
+            processCSVData(data) {
+                const latestData = new Map();
+                // Get the last known position for each boat
+                for (let i = data.length - 1; i >= 0; i--) {
+                    const row = data[i];
+                    if (row.sailboat_id && !latestData.has(row.sailboat_id)) {
+                        latestData.set(row.sailboat_id, {
+                            lat: parseFloat(row.latitude),
+                            lng: parseFloat(row.longitude),
+                            heading: parseFloat(row.compass_heading),
+                            tilt: parseFloat(row.tilt)
+                        });
+                    }
+                }
+
+                latestData.forEach((data, id) => {
+                    if (!this.sailboats.has(id)) {
+                        // New boat detected
+                        const color = this.boatColors[this.sailboats.size % this.boatColors.length];
+                        this.sailboats.set(id, { ...data, color, marker: null, label: null });
+                        this.updateBoatSelector();
+                    }
+                    // Update boat data
+                    const boat = this.sailboats.get(id);
+                    Object.assign(boat, data);
+                    this.updateBoatMarker(id);
+                });
+
+                if (!this.selectedBoatId && this.sailboats.size > 0) {
+                    this.selectedBoatId = this.sailboats.keys().next().value;
+                    document.getElementById('boatSelector').value = this.selectedBoatId;
+                }
+
+                this.updateSelectedBoatInfo();
+                this.updateStatus(`Tracking ${this.sailboats.size} boats. Last update: ${new Date().toLocaleTimeString()}`);
+            }
+
+            updateBoatSelector() {
+                const selector = document.getElementById('boatSelector');
+                const currentSelection = selector.value;
+                selector.innerHTML = '';
+                this.sailboats.forEach((boat, id) => {
+                    const option = document.createElement('option');
+                    option.value = id;
+                    option.textContent = id;
+                    selector.appendChild(option);
+                });
+                selector.value = currentSelection;
+            }
+
+            updateBoatMarker(boatId) {
+                const boat = this.sailboats.get(boatId);
+                if (!boat) return;
+
+                const iconHtml = `<div style="transform: rotate(${boat.heading}deg); font-size: 24px; color: ${boat.color};">&#9650;</div>`;
+                const boatIcon = L.divIcon({
+                    html: iconHtml,
+                    className: 'boat-icon-wrapper',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
+
+                if (boat.marker) {
+                    boat.marker.setLatLng([boat.lat, boat.lng]);
+                    boat.marker.setIcon(boatIcon);
+                } else {
+                    boat.marker = L.marker([boat.lat, boat.lng], { icon: boatIcon }).addTo(this.map);
+                    boat.marker.bindTooltip(boatId, { permanent: true, direction: 'top', className: 'boat-label', offset: [0, -15] });
+                }
+            }
+
+            updateSelectedBoatInfo() {
+                if (!this.selectedBoatId || !this.sailboats.has(this.selectedBoatId)) {
+                    document.getElementById('currentInfo').innerHTML = 'No boat selected.';
+                    this.updateTiltDisplay(0);
+                    return;
+                }
+
+                const boat = this.sailboats.get(this.selectedBoatId);
+                document.getElementById('currentInfo').innerHTML = `
+                    Lat: ${boat.lat.toFixed(6)}<br>
+                    Lng: ${boat.lng.toFixed(6)}<br>
+                    Heading: ${boat.heading.toFixed(1)}°
+                `;
+                this.updateTiltDisplay(boat.tilt);
+            }
+
+            updateTiltDisplay(tilt) {
+                const horizonLine = document.getElementById('horizonLine');
+                const tiltValue = document.getElementById('tiltValue');
+                horizonLine.style.transform = `translateY(-50%) rotate(${tilt}deg)`;
+                tiltValue.textContent = `${Math.abs(tilt).toFixed(1)}°`;
+
+                if (Math.abs(tilt) < 15) {
+                    horizonLine.style.background = '#00c853';
+                    tiltValue.style.color = '#00c853';
+                } else if (Math.abs(tilt) < 30) {
+                    horizonLine.style.background = '#ffab00';
+                    tiltValue.style.color = '#ffab00';
+                } else {
+                    horizonLine.style.background = '#ff4d4d';
+                    tiltValue.style.color = '#ff4d4d';
+                }
+            }
+
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => new MultiSailboatTracker());
+    </script>
+</body>
+</html>
