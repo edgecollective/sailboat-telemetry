@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fleet Tracker v17</title>
+    <title>Fleet Tracker v18</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #121212; color: white; display: flex; height: 100vh; overflow: hidden; }
@@ -11,7 +11,7 @@
         #map { flex-grow: 1; height: 100vh; background-color: #121212; cursor: grab; }
         .control-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 5px; font-size: 12px; color: #aaa; font-weight: 500; }
-        input, button { width: 100%; padding: 10px; border: 1px solid #444; border-radius: 5px; background: #333; color: white; font-size: 14px; box-sizing: border-box; }
+        input, button, select { width: 100%; padding: 10px; border: 1px solid #444; border-radius: 5px; background: #333; color: white; font-size: 14px; box-sizing: border-box; }
         button { background: #007aff; cursor: pointer; margin-top: 10px; font-weight: 600; transition: background-color 0.2s; }
         button:hover { background: #0056b3; }
         button:disabled { background: #555; cursor: not-allowed; }
@@ -55,7 +55,7 @@
 </head>
 <body>
     <div id="sidebar">
-        <h2>Fleet Tracker v17</h2>
+        <h2>Fleet Tracker v18</h2>
         <div class="control-group">
             <label for="fileUrl">CSV File URL:</label>
             <input type="text" id="fileUrl" value="./sailboat_data_multi.csv" />
@@ -64,10 +64,17 @@
             <label for="updateInterval">Update Interval (s):</label>
             <input type="number" id="updateInterval" value="2" min="1" max="60" />
         </div>
-        <!-- New control group for tilt threshold -->
         <div class="control-group">
             <label for="tiltThreshold">Max Tilt Threshold (°):</label>
             <input type="number" id="tiltThreshold" value="30" min="0" max="90" />
+        </div>
+        <div class="control-group">
+            <label for="mapType">Base Map:</label>
+            <select id="mapType">
+                <option value="dark">Dark (CARTO)</option>
+                <option value="bw">Black & White (Stadia Maps)</option>
+                <option value="satellite">Satellite (Esri World Imagery)</option>
+            </select>
         </div>
         <button id="startTracking">Start Tracking</button>
         <button id="stopTracking" disabled>Stop Tracking</button>
@@ -83,9 +90,10 @@
     <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
     
     <script>
-        class FleetTrackerV17 {
+        class FleetTrackerV18 {
             constructor() {
                 this.map = null;
+                this.currentTileLayer = null; // To store the active tile layer
                 this.sailboats = new Map();
                 this.shorePoint = null;
                 this.selectedBoatId = null;
@@ -99,13 +107,28 @@
                 this.baseStationMode = false;
                 this.tiltThreshold = parseFloat(document.getElementById('tiltThreshold').value);
 
+                this.mapTypes = {
+                    dark: {
+                        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                        attribution: 'CARTO'
+                    },
+                    bw: {
+                        url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
+                        attribution: '&copy; <a href="https://stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    },
+                    satellite: {
+                        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                    }
+                };
+
                 this.initMap();
                 this.initControls();
             }
 
             initMap() {
                 this.map = L.map('map').setView([41.777, -71.389], 13);
-                L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: 'CARTO' }).addTo(this.map);
+                this.changeBaseMap(document.getElementById('mapType').value); // Set initial map type
                 this.map.on('click', (e) => {
                     if (this.baseStationMode) {
                         this.setShorePoint(e.latlng);
@@ -124,6 +147,15 @@
                     this.tiltThreshold = parseFloat(e.target.value);
                     this.updateUI();
                 });
+                document.getElementById('mapType').addEventListener('change', (e) => this.changeBaseMap(e.target.value));
+            }
+
+            changeBaseMap(mapType) {
+                if (this.currentTileLayer) {
+                    this.map.removeLayer(this.currentTileLayer);
+                }
+                const mapInfo = this.mapTypes[mapType];
+                this.currentTileLayer = L.tileLayer(mapInfo.url, { attribution: mapInfo.attribution }).addTo(this.map);
             }
 
             toggleBaseStationMode() {
@@ -139,7 +171,7 @@
                     mapElement.style.cursor = 'grab';
                     this.map.dragging.enable();
                     placeButton.textContent = 'Place Base Station';
-                    this.updateStatus(this.shorePoint ? 'Shore point set. Drag to move.' : 'Move the map around or click Place Base Station to set a shore point.');
+                    this.updateStatus(this.shorePoint ? 'Shore point set. Drag to move.' : 'Move the map around or click 'Place Base Station' to set a shore point.');
                 }
             }
 
@@ -185,7 +217,7 @@
                     const response = await fetch(this.fileUrl + `?t=${Date.now()}`, { cache: 'no-cache' });
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const csvContent = await response.text();
-                    if (csvContent === this.lastData) return;
+                    
                     this.lastData = csvContent;
                     Papa.parse(csvContent, { header: true, skipEmptyLines: true, complete: (results) => this.processCSVData(results.data) });
                 } catch (error) {
@@ -294,7 +326,6 @@
                 card.querySelector('.tilt-graphic').style.transform = `rotate(${boat.tilt}deg)`;
                 card.querySelector('.distance-label').textContent = this.shorePoint ? `${(boat.distance / 1000).toFixed(2)} km` : 'N/A';
 
-                // Apply tilt warning to card
                 if (Math.abs(boat.tilt) > this.tiltThreshold) {
                     card.classList.add('tilt-warning');
                 } else {
@@ -308,7 +339,6 @@
 
                 const iconSvg = `<svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 2L2 22h20L12 2z" fill="${boat.color}" stroke="#ffffff" stroke-width="1.5" transform="rotate(${boat.heading}, 12, 12)"/></svg>`;
                 
-                // Determine if tilt warning class should be applied
                 const tiltWarningClass = Math.abs(boat.tilt) > this.tiltThreshold ? ' tilt-warning' : '';
                 const boatIcon = L.divIcon({ html: iconSvg, className: `boat-icon-wrapper${tiltWarningClass}`, iconSize: [24, 24], iconAnchor: [12, 12] });
 
@@ -317,7 +347,6 @@
 
                 if (boat.marker) {
                     boat.marker.setLatLng([boat.lat, boat.lng]);
-                    // Update the icon to reflect potential tilt warning
                     boat.marker.setIcon(L.divIcon({ html: iconSvg, className: `boat-icon-wrapper${tiltWarningClass}`, iconSize: [24, 24], iconAnchor: [12, 12] }));
                     boat.marker.getTooltip().setContent(labelContent);
                 } else {
@@ -342,7 +371,7 @@
             }
         }
 
-        document.addEventListener('DOMContentLoaded', () => new FleetTrackerV17());
+        document.addEventListener('DOMContentLoaded', () => new FleetTrackerV18());
     </script>
 </body>
 </html>

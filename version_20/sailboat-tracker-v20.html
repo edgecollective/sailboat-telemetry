@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fleet Tracker v20</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #121212; color: white; display: flex; height: 100vh; overflow: hidden; }
+        #sidebar { width: 350px; background: #1e1e1e; padding: 15px; box-sizing: border-box; border-right: 1px solid #333; overflow-y: auto; z-index: 1000; display: flex; flex-direction: column; }
+        #map { flex-grow: 1; height: 100vh; background-color: #121212; cursor: grab; }
+        .control-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-size: 12px; color: #aaa; font-weight: 500; }
+        input, button, select { width: 100%; padding: 10px; border: 1px solid #444; border-radius: 5px; background: #333; color: white; font-size: 14px; box-sizing: border-box; }
+        button { background: #007aff; cursor: pointer; margin-top: 10px; font-weight: 600; transition: background-color 0.2s; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        #status { font-size: 12px; color: #888; margin-top: auto; padding-top: 15px; border-top: 1px solid #333; line-height: 1.4; }
+        #boat-list-container { flex-grow: 1; margin-top: 20px; display: flex; flex-direction: column; }
+        .boat-info-card { background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid; transition: all 0.3s; cursor: pointer; display: flex; gap: 15px; align-items: center; order: 0; }
+        .boat-info-card.selected { background-color: #3c3c3c; border-left-width: 8px; }
+        .boat-details { flex-grow: 1; }
+        .boat-info-card h4 { margin: 0 0 10px 0; font-size: 16px; }
+        .boat-data-grid { display: grid; grid-template-columns: 1fr; gap: 4px; font-size: 12px; color: #ccc; }
+        .boat-data-grid span { font-weight: 600; color: white; }
+        .distance-label { font-weight: bold; color: #48dbfb; }
+        .rssi-label { font-weight: bold; }
+        .rssi-excellent { color: #1dd1a1; }
+        .rssi-good { color: #feca57; }
+        .rssi-fair { color: #ff9f43; }
+        .rssi-poor { color: #ff6b6b; }
+        .boat-stale { opacity: 0.5; border: 2px dashed #666 !important; }
+        .boat-stale .boat-details h4::after { content: ' (STALE)'; color: #ff6b6b; font-size: 10px; }
+        .data-age { font-size: 10px; color: #888; }
+        .data-age.fresh { color: #1dd1a1; }
+        .data-age.old { color: #feca57; }
+        .data-age.stale { color: #ff6b6b; }
+        .tilt-display { width: 80px; height: 80px; position: relative; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #444; border-radius: 50%; background: #222; }
+        .tilt-tick { position: absolute; width: 1px; height: 5px; background: #777; transform-origin: center 40px; left: 50%; top: 0;}
+        .tilt-tick.major { height: 8px; background: #aaa; }
+        .tilt-graphic { width: 100%; height: 100%; transition: transform 0.3s ease; position: absolute; }
+        .boat-hull { width: 50px; height: 25px; border-radius: 0 0 25px 25px; position: absolute; bottom: 15px; left: 15px; }
+        .boat-mast { width: 4px; height: 25px; position: absolute; bottom: 40px; left: 38px; transform-origin: bottom center; }
+        .boat-icon-wrapper, .shore-icon-wrapper { text-align: center; line-height: 30px; }
+        .boat-label, .distance-line-label { background: rgba(0,0,0,0.7); color: white; padding: 3px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 5px rgba(0,0,0,0.3); border: none; text-align: center; }
+
+        /* New CSS for tilt warning */
+        .boat-icon-wrapper.tilt-warning {
+            position: relative;
+        }
+        .boat-icon-wrapper.tilt-warning::before {
+            content: '';
+            position: absolute;
+            top: -5px;
+            left: -5px;
+            right: -5px;
+            bottom: -5px;
+            border: 2px solid red;
+            border-radius: 50%;
+            z-index: -1;
+        }
+        .boat-info-card.tilt-warning {
+            border: 2px solid red;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>Fleet Tracker v20</h2>
+        <div class="control-group">
+            <label for="fileUrl">CSV File URL:</label>
+            <input type="text" id="fileUrl" value="./sailboat_data_multi.csv" />
+        </div>
+        <div class="control-group">
+            <label for="updateInterval">Update Interval (s):</label>
+            <input type="number" id="updateInterval" value="2" min="1" max="60" />
+        </div>
+        <div class="control-group">
+            <label for="tiltThreshold">Max Tilt Threshold (°):</label>
+            <input type="number" id="tiltThreshold" value="30" min="0" max="90" />
+        </div>
+        <div class="control-group">
+            <label for="mapType">Base Map:</label>
+            <select id="mapType">
+                <option value="dark">Dark (CARTO)</option>
+                <option value="bw">Black & White (Stadia Maps)</option>
+                <option value="satellite">Satellite (Esri World Imagery)</option>
+            </select>
+        </div>
+        <button id="startTracking">Start Tracking</button>
+        <button id="stopTracking" disabled>Stop Tracking</button>
+        <button id="placeBaseStation">Place Base Station</button>
+        
+        <div id="boat-list-container"></div>
+        <div id="status">Move the map around or click 'Place Base Station' to set a shore point.</div>
+    </div>
+    
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    
+    <script>
+        class FleetTrackerV20 {
+            constructor() {
+                this.map = null;
+                this.currentTileLayer = null; // To store the active tile layer
+                this.sailboats = new Map();
+                this.shorePoint = null;
+                this.selectedBoatId = null;
+                this.isTracking = false;
+                this.updateInterval = null;
+                this.lastData = "";
+                this.fileUrl = document.getElementById('fileUrl').value;
+                this.boatListContainer = document.getElementById('boat-list-container');
+                this.uniformBoatColor = '#48dbfb'; // Single color for all boats
+                this.TRAIL_LENGTH = 10;
+                this.baseStationMode = false;
+                this.tiltThreshold = parseFloat(document.getElementById('tiltThreshold').value);
+                this.STALE_THRESHOLD_MS = 30000; // 30 seconds
+                this.OLD_THRESHOLD_MS = 10000; // 10 seconds
+
+                this.mapTypes = {
+                    dark: {
+                        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                        attribution: 'CARTO'
+                    },
+                    bw: {
+                        url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
+                        attribution: '&copy; <a href="https://stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    },
+                    satellite: {
+                        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                    }
+                };
+
+                this.initMap();
+                this.initControls();
+            }
+
+            initMap() {
+                this.map = L.map('map').setView([41.777, -71.389], 13);
+                this.changeBaseMap(document.getElementById('mapType').value); // Set initial map type
+                this.map.on('click', (e) => {
+                    if (this.baseStationMode) {
+                        this.setShorePoint(e.latlng);
+                        this.toggleBaseStationMode();
+                    }
+                });
+                this.map.dragging.enable();
+            }
+
+            initControls() {
+                document.getElementById('startTracking').addEventListener('click', () => this.startTracking());
+                document.getElementById('stopTracking').addEventListener('click', () => this.stopTracking());
+                document.getElementById('fileUrl').addEventListener('change', (e) => this.fileUrl = e.target.value);
+                document.getElementById('placeBaseStation').addEventListener('click', () => this.toggleBaseStationMode());
+                document.getElementById('tiltThreshold').addEventListener('change', (e) => {
+                    this.tiltThreshold = parseFloat(e.target.value);
+                    this.updateUI();
+                });
+                document.getElementById('mapType').addEventListener('change', (e) => this.changeBaseMap(e.target.value));
+            }
+
+            changeBaseMap(mapType) {
+                if (this.currentTileLayer) {
+                    this.map.removeLayer(this.currentTileLayer);
+                }
+                const mapInfo = this.mapTypes[mapType];
+                this.currentTileLayer = L.tileLayer(mapInfo.url, { attribution: mapInfo.attribution }).addTo(this.map);
+            }
+
+            toggleBaseStationMode() {
+                this.baseStationMode = !this.baseStationMode;
+                const mapElement = document.getElementById('map');
+                const placeButton = document.getElementById('placeBaseStation');
+                if (this.baseStationMode) {
+                    mapElement.style.cursor = 'crosshair';
+                    this.map.dragging.disable();
+                    placeButton.textContent = 'Cancel Placement';
+                    this.updateStatus('Click on the map to place the base station.');
+                } else {
+                    mapElement.style.cursor = 'grab';
+                    this.map.dragging.enable();
+                    placeButton.textContent = 'Place Base Station';
+                    this.updateStatus(this.shorePoint ? 'Shore point set. Drag to move.' : 'Move the map around or click \'Place Base Station\' to set a shore point.');
+                }
+            }
+
+            setShorePoint(latlng) {
+                if (this.shorePoint) this.map.removeLayer(this.shorePoint);
+                const shoreIcon = L.divIcon({ html: '<svg width="24" height="24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="#feca57"/></svg>', className: 'shore-icon-wrapper', iconSize: [24, 24], iconAnchor: [12, 24] });
+                this.shorePoint = L.marker(latlng, { icon: shoreIcon, draggable: true }).addTo(this.map);
+                this.shorePoint.on('dragend', () => this.updateAllDistances());
+                this.updateStatus('Shore point set. Drag to move.');
+                this.updateAllDistances();
+            }
+
+            updateAllDistances() {
+                if (!this.shorePoint) return;
+                this.sailboats.forEach(boat => {
+                    boat.distance = this.shorePoint.getLatLng().distanceTo([boat.lat, boat.lng]);
+                });
+                this.updateUI();
+            }
+
+            startTracking() {
+                if (this.isTracking) return;
+                this.isTracking = true;
+                document.getElementById('startTracking').disabled = true;
+                document.getElementById('stopTracking').disabled = false;
+                this.updateStatus('Starting tracking...');
+                this.fetchAndProcessFile();
+                const interval = parseInt(document.getElementById('updateInterval').value, 10) * 1000;
+                this.updateInterval = setInterval(() => this.fetchAndProcessFile(), interval);
+            }
+
+            stopTracking() {
+                if (!this.isTracking) return;
+                this.isTracking = false;
+                document.getElementById('startTracking').disabled = false;
+                document.getElementById('stopTracking').disabled = true;
+                clearInterval(this.updateInterval);
+                this.updateStatus('Tracking stopped.');
+            }
+
+            async fetchAndProcessFile() {
+                try {
+                    const response = await fetch(this.fileUrl + `?t=${Date.now()}`, { cache: 'no-cache' });
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    const csvContent = await response.text();
+                    
+                    this.lastData = csvContent;
+                    Papa.parse(csvContent, { header: true, skipEmptyLines: true, complete: (results) => this.processCSVData(results.data) });
+                } catch (error) {
+                    this.updateStatus(`Error: ${error.message}`);
+                    console.error('Fetch error:', error);
+                }
+            }
+
+            processCSVData(data) {
+                const allBoatData = new Map();
+                const now = Date.now();
+                
+                for (const row of data) {
+                    if (!row.sailboat_id) continue;
+                    
+                    // Parse and validate data
+                    const lat = parseFloat(row.latitude);
+                    const lng = parseFloat(row.longitude);
+                    const heading = parseFloat(row.compass_heading);
+                    const tilt = parseFloat(row.tilt);
+                    const rssi = parseFloat(row.rssi || -70);
+                    const timestamp = row.timestamp ? new Date(row.timestamp).getTime() : now;
+                    const index = parseInt(row.index || 0);
+                    
+                    // Validate coordinates (reasonable bounds for earth)
+                    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                        console.warn(`Invalid coordinates for ${row.sailboat_id}: ${lat}, ${lng}`);
+                        continue;
+                    }
+                    
+                    // Validate RSSI (typical WiFi range)
+                    if (isNaN(rssi) || rssi < -120 || rssi > 0) {
+                        console.warn(`Invalid RSSI for ${row.sailboat_id}: ${rssi}`);
+                        continue;
+                    }
+                    
+                    if (!allBoatData.has(row.sailboat_id)) allBoatData.set(row.sailboat_id, []);
+                    allBoatData.get(row.sailboat_id).push({ 
+                        lat, lng, heading, tilt, rssi, timestamp, index,
+                        age: now - timestamp
+                    });
+                }
+
+                allBoatData.forEach((history, id) => {
+                    // Sort by timestamp, then by index for tie-breaking
+                    history.sort((a, b) => {
+                        if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+                        return a.index - b.index;
+                    });
+                    
+                    const latestData = history[history.length - 1];
+                    const trail = history.slice(-this.TRAIL_LENGTH);
+                    const distance = this.shorePoint ? this.shorePoint.getLatLng().distanceTo([latestData.lat, latestData.lng]) : 0;
+                    
+                    // Determine data freshness
+                    let ageStatus = 'fresh';
+                    if (latestData.age > this.STALE_THRESHOLD_MS) {
+                        ageStatus = 'stale';
+                    } else if (latestData.age > this.OLD_THRESHOLD_MS) {
+                        ageStatus = 'old';
+                    }
+
+                    if (!this.sailboats.has(id)) {
+                        const color = this.uniformBoatColor;
+                        this.sailboats.set(id, { id, ...latestData, color, trail, distance, ageStatus, marker: null, trailLayer: null, cardElement: null, distanceLine: null, rssiLabel: null });
+                    } else {
+                        const boat = this.sailboats.get(id);
+                        Object.assign(boat, latestData, { trail, distance, ageStatus });
+                    }
+                });
+                this.updateUI();
+            }
+
+            getRSSIClass(rssi) {
+                if (rssi >= -50) return 'rssi-excellent';
+                if (rssi >= -60) return 'rssi-good';
+                if (rssi >= -70) return 'rssi-fair';
+                return 'rssi-poor';
+            }
+
+            getRSSIColor(rssi) {
+                if (rssi >= -50) return '#1dd1a1'; // Green - Excellent
+                if (rssi >= -60) return '#feca57'; // Yellow - Good
+                if (rssi >= -70) return '#ff9f43'; // Orange - Fair
+                return '#ff6b6b'; // Red - Poor
+            }
+
+            updateUI() {
+                const sortedBoats = Array.from(this.sailboats.values()).sort((a, b) => b.distance - a.distance);
+                
+                sortedBoats.forEach((boat, index) => {
+                    if (!boat.cardElement) this.createBoatCard(boat.id);
+                    boat.cardElement.style.order = index;
+                    this.updateBoatOnMap(boat.id);
+                    this.updateBoatCard(boat.id);
+                });
+
+                this.updateStatus(`Tracking ${this.sailboats.size} boats. Last update: ${new Date().toLocaleTimeString()}`);
+            }
+
+            createBoatCard(boatId) {
+                const boat = this.sailboats.get(boatId);
+                const card = document.createElement('div');
+                card.className = 'boat-info-card';
+                card.id = `card-${boatId}`;
+                card.style.borderColor = boat.color;
+                
+                let ticksHtml = '';
+                for(let i = 0; i < 360; i += 15) {
+                    const isMajor = i % 90 === 0;
+                    ticksHtml += `<div class="tilt-tick ${isMajor ? 'major' : ''}" style="transform: rotate(${i}deg);"></div>`;
+                }
+
+                card.innerHTML = `
+                    <div class="tilt-display">
+                        ${ticksHtml}
+                        <div class="tilt-graphic">
+                            <div class="boat-hull" style="background-color: ${boat.color};"></div>
+                            <div class="boat-mast" style="background-color: ${boat.color};"></div>
+                        </div>
+                    </div>
+                    <div class="boat-details">
+                        <h4>${boatId}</h4>
+                        <div class="boat-data-grid">
+                            <div>Lat: <span class="data-lat">--</span></div>
+                            <div>Lng: <span class="data-lng">--</span></div>
+                            <div>Heading: <span class="data-heading">--</span></div>
+                            <div>Tilt: <span class="data-tilt">--</span></div>
+                            <div>Distance: <span class="distance-label">--</span></div>
+                            <div>RSSI: <span class="rssi-label">--</span></div>
+                            <div>Age: <span class="data-age">--</span></div>
+                        </div>
+                    </div>
+                `;
+                this.boatListContainer.appendChild(card);
+                boat.cardElement = card;
+                card.addEventListener('click', () => this.selectBoat(boatId));
+            }
+
+            selectBoat(boatId) {
+                this.selectedBoatId = boatId;
+                this.sailboats.forEach(b => {
+                    b.cardElement.classList.toggle('selected', b.id === boatId);
+                    if (b.marker) {
+                        const tooltip = b.marker.getTooltip();
+                        if (tooltip) {
+                            const content = b.id === boatId && this.shorePoint ? `${b.id}<br>${(b.distance / 1000).toFixed(2)} km` : b.id;
+                            tooltip.setContent(content);
+                        }
+                    }
+                });
+                this.map.flyTo([this.sailboats.get(boatId).lat, this.sailboats.get(boatId).lng], 16);
+            }
+
+            updateBoatCard(boatId) {
+                const boat = this.sailboats.get(boatId);
+                if (!boat || !boat.cardElement) return;
+                const card = boat.cardElement;
+                card.querySelector('.data-lat').textContent = boat.lat.toFixed(4);
+                card.querySelector('.data-lng').textContent = boat.lng.toFixed(4);
+                card.querySelector('.data-heading').textContent = `${boat.heading.toFixed(1)}°`;
+                card.querySelector('.data-tilt').textContent = `${boat.tilt.toFixed(1)}°`;
+                card.querySelector('.tilt-graphic').style.transform = `rotate(${boat.tilt}deg)`;
+                card.querySelector('.distance-label').textContent = this.shorePoint ? `${(boat.distance / 1000).toFixed(2)} km` : 'N/A';
+                
+                // Update RSSI display
+                const rssiElement = card.querySelector('.rssi-label');
+                rssiElement.textContent = `${boat.rssi.toFixed(0)} dBm`;
+                rssiElement.className = `rssi-label ${this.getRSSIClass(boat.rssi)}`;
+                
+                // Update age display
+                const ageElement = card.querySelector('.data-age');
+                const ageSeconds = Math.floor(boat.age / 1000);
+                if (ageSeconds < 60) {
+                    ageElement.textContent = `${ageSeconds}s`;
+                } else {
+                    ageElement.textContent = `${Math.floor(ageSeconds / 60)}m ${ageSeconds % 60}s`;
+                }
+                ageElement.className = `data-age ${boat.ageStatus}`;
+                
+                // Apply stale styling
+                if (boat.ageStatus === 'stale') {
+                    card.classList.add('boat-stale');
+                } else {
+                    card.classList.remove('boat-stale');
+                }
+
+                if (Math.abs(boat.tilt) > this.tiltThreshold) {
+                    card.classList.add('tilt-warning');
+                } else {
+                    card.classList.remove('tilt-warning');
+                }
+            }
+
+            updateBoatOnMap(boatId) {
+                const boat = this.sailboats.get(boatId);
+                if (!boat) return;
+                
+                // Adjust opacity and styling based on data age
+                const opacity = boat.ageStatus === 'stale' ? 0.3 : boat.ageStatus === 'old' ? 0.7 : 1.0;
+                const strokeColor = boat.ageStatus === 'stale' ? '#666' : '#ffffff';
+
+                const iconSvg = `<svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 2L2 22h20L12 2z" fill="${boat.color}" stroke="${strokeColor}" stroke-width="1.5" opacity="${opacity}" transform="rotate(${boat.heading}, 12, 12)"/></svg>`;
+                
+                const tiltWarningClass = Math.abs(boat.tilt) > this.tiltThreshold ? ' tilt-warning' : '';
+                const boatIcon = L.divIcon({ html: iconSvg, className: `boat-icon-wrapper${tiltWarningClass}`, iconSize: [24, 24], iconAnchor: [12, 12] });
+
+                const isSelected = boat.id === this.selectedBoatId;
+                let labelContent = boat.id;
+                if (isSelected && this.shorePoint) {
+                    labelContent = `${boat.id}<br>${(boat.distance / 1000).toFixed(2)} km<br>${boat.rssi.toFixed(0)} dBm`;
+                }
+
+                if (boat.marker) {
+                    boat.marker.setLatLng([boat.lat, boat.lng]);
+                    boat.marker.setIcon(L.divIcon({ html: iconSvg, className: `boat-icon-wrapper${tiltWarningClass}`, iconSize: [24, 24], iconAnchor: [12, 12] }));
+                    boat.marker.getTooltip().setContent(labelContent);
+                } else {
+                    boat.marker = L.marker([boat.lat, boat.lng], { icon: boatIcon }).addTo(this.map);
+                    boat.marker.bindTooltip(labelContent, { permanent: true, direction: 'bottom', className: 'boat-label', offset: [0, 12] });
+                    boat.trailLayer = L.polyline([], { color: boat.color, weight: 3, opacity: 0.6 }).addTo(this.map);
+                }
+                
+                // Update trail with proper ordering and age-based opacity
+                const trailOpacity = boat.ageStatus === 'stale' ? 0.2 : boat.ageStatus === 'old' ? 0.4 : 0.6;
+                boat.trailLayer.setLatLngs(boat.trail.map(p => [p.lat, p.lng]));
+                boat.trailLayer.setStyle({ opacity: trailOpacity });
+
+                if (this.shorePoint) {
+                    const shoreLatLng = this.shorePoint.getLatLng();
+                    const boatLatLng = [boat.lat, boat.lng];
+                    const linePoints = [shoreLatLng, boatLatLng];
+                    const rssiColor = this.getRSSIColor(boat.rssi);
+                    
+                    if (boat.distanceLine) {
+                        boat.distanceLine.setLatLngs(linePoints);
+                        boat.distanceLine.setStyle({ color: rssiColor });
+                    } else {
+                        boat.distanceLine = L.polyline(linePoints, { color: rssiColor, weight: 2, opacity: 0.7, dashArray: '5, 10' }).addTo(this.map);
+                    }
+
+                    // Clean up any existing RSSI labels on distance lines (no longer used)
+                    if (boat.rssiLabel) {
+                        this.map.removeLayer(boat.rssiLabel);
+                        boat.rssiLabel = null;
+                    }
+                }
+            }
+
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => new FleetTrackerV20());
+    </script>
+</body>
+</html>
